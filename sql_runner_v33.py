@@ -910,10 +910,13 @@ class SQLRunnerApp:
 
         lf_mach = ttk.LabelFrame(left_col, text="Machine")
         lf_mach.pack(side=TOP, fill=X)
-        for i, m in enumerate(MACHINE_OPTIONS):
+        # NoATW / ATW → row 0, JC2 6,7line → row 1
+        _mach_pos = {"NoATW": (0, 0), "ATW": (0, 1), "JC2 6,7line": (1, 0)}
+        for m in MACHINE_OPTIONS:
+            r, c = _mach_pos[m]
             cb = Checkbutton(lf_mach, text=m, variable=self.machine_vars[m],
                              command=self.on_filter_change)
-            cb.grid(row=0, column=i, sticky=W, padx=4, pady=2)
+            cb.grid(row=r, column=c, sticky=W, padx=4, pady=2)
             self.machine_cbs[m] = cb
 
         # 중앙: Equipment (버튼 세로 3줄)
@@ -928,7 +931,7 @@ class SQLRunnerApp:
         eq_grid.grid(row=0, column=1, sticky=E + W, padx=4, pady=2)
         lf_eq.grid_columnconfigure(1, weight=1)
         for i, label in enumerate(self.equipment_vars):
-            r, c = divmod(i, 10)
+            r, c = divmod(i, 8)
             cb = Checkbutton(eq_grid, text=label, variable=self.equipment_vars[label],
                              font=SMALL_FONT)
             cb.grid(row=r, column=c, sticky=W, padx=2, pady=0)
@@ -982,13 +985,16 @@ class SQLRunnerApp:
                 result.append(label)
         return result
 
+    _mach_grid_pos = {"NoATW": (0, 0), "ATW": (0, 1), "JC2 6,7line": (1, 0)}
+
     def on_filter_change(self):
-        for i, m in enumerate(MACHINE_OPTIONS):
+        for m in MACHINE_OPTIONS:
             cb = self.machine_cbs.get(m)
             if not cb:
                 continue
             if self.machine_visible(m):
-                cb.grid(row=0, column=i, sticky=W, padx=1)
+                r, c = self._mach_grid_pos[m]
+                cb.grid(row=r, column=c, sticky=W, padx=4, pady=2)
             else:
                 cb.grid_remove()
         visible = set(self.visible_equipment())
