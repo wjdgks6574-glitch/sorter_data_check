@@ -1044,7 +1044,7 @@ class SQLRunnerApp:
             var = BooleanVar(value=True)
             self.result_equipment_vars[eq] = var
             label = self.eq_label_map.get(eq, eq)
-            Checkbutton(self.result_filter_frame, text=label, variable=var, command=self.apply_result_filter, font=SMALL_FONT).grid(row=i // 10, column=i % 10, sticky=W, padx=2, pady=0)
+            Checkbutton(self.result_filter_frame, text=label, variable=var, command=self.apply_result_filter, font=SMALL_FONT).grid(row=i // 7, column=i % 7, sticky=W, padx=2, pady=0)
         self.apply_result_filter()
 
     def selected_result_equipment(self):
