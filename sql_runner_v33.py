@@ -178,16 +178,22 @@ INSERT_JC01_SQL = INSERT_JC02_SQL.replace("'DCOLDB', 'JC02'", "'DCOLDBJC1', 'JC0
     "FROM DCOLDB.dbo.CT_SORTERRESULT", "FROM DCOLDBJC1.dbo.CT_SORTERRESULT"
 ).replace("sr.SiteID = '9012C'", "sr.SiteID = '9011'")
 
-POST_BASE_SQL = """
+POST_INDEX_SQL = """
 SET NOCOUNT ON;
 CREATE CLUSTERED INDEX IX_Base_LotBinCounter ON #BaseSorterResult (SourceDB, LotCounter, [Bin], BinCounter);
 CREATE NONCLUSTERED INDEX IX_Base_Wafer ON #BaseSorterResult (WaferID) INCLUDE ([Date], EquipmentID, PortID, LotCounter, NCell, LamaID, [Comment]);
+"""
 
+POST_LOTKEYS_SQL = """
+SET NOCOUNT ON;
 SELECT DISTINCT SourceDB, LotCounter INTO #LotKeys
 FROM #BaseSorterResult
 WHERE LotCounter IS NOT NULL;
 CREATE UNIQUE CLUSTERED INDEX IX_LotKeys ON #LotKeys (SourceDB, LotCounter);
+"""
 
+POST_LABEL_SQL = """
+SET NOCOUNT ON;
 INSERT INTO #BaseSorterLabel (SourceDB, LotCounter, Datum)
 SELECT SourceDB, LotCounter, MAX(Datum)
 FROM (
@@ -201,10 +207,11 @@ FROM (
 ) L
 GROUP BY SourceDB, LotCounter;
 CREATE UNIQUE CLUSTERED INDEX IX_Label_Lot ON #BaseSorterLabel (SourceDB, LotCounter);
+"""
 
--- 3중 CROSS APPLY → 단일 OUTER APPLY로 평탄화
--- REVERSE 제거: CHARINDEX + RIGHT 조합으로 교체
--- ClassOnlyGroup/ClassGroup 중복 CASE 통합
+POST_LABELMISSING_SQL = """
+SET NOCOUNT ON;
+-- NOT EXISTS로 라벨 없는 행만 먼저 추려낸 후 OUTER APPLY 실행 (LEFT JOIN+IS NULL 대비 OUTER APPLY 실행 횟수 감소)
 SELECT
     b.SourceDB, b.Site, b.[Date], b.EquipmentID, b.PortID, b.LotCounter,
     b.[Class], b.BinCounter, b.[Comment], b.ArtikelNummer, b.WaferID, b.[Bin],
@@ -231,28 +238,25 @@ FROM (
     FROM #BaseSorterResult b
     WHERE b.[Comment] < 9000000
       AND b.LotCounter IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM #BaseSorterLabel lbl
+          WHERE lbl.SourceDB = b.SourceDB AND lbl.LotCounter = b.LotCounter
+      )
 ) b
-LEFT JOIN #BaseSorterLabel lbl
-       ON lbl.SourceDB = b.SourceDB AND lbl.LotCounter = b.LotCounter
 OUTER APPLY (
-    -- 1단계: raw 정규화 + ClassArticleCode + ArtikelCode 계산을 한 번에
     SELECT
         ClassRaw,
         ArtikelRaw,
-        -- ArtikelCode: 특수문자 제거
         NULLIF(REPLACE(REPLACE(REPLACE(ArtikelRaw, '-', ''), ' ', ''), '/', ''), '') AS ArtikelCode,
-        -- ClassArticleCode: 마지막 '/' 이후 추출 (REVERSE 없이)
         NULLIF(
             REPLACE(REPLACE(REPLACE(
                 CASE
                     WHEN CHARINDEX('/', ClassRaw) = 0 THEN ClassRaw
-                    ELSE RIGHT(ClassRaw, LEN(ClassRaw) - LEN(ClassRaw)
-                             + LEN(ClassRaw) - CHARINDEX('/', ClassRaw,
-                                LEN(ClassRaw) - CHARINDEX('/', ClassRaw) + 1) )
+                    ELSE RIGHT(ClassRaw, LEN(ClassRaw) - CHARINDEX('/', ClassRaw,
+                                LEN(ClassRaw) - CHARINDEX('/', ClassRaw) + 1))
                 END,
             '-', ''), ' ', ''), '/', ''),
         '') AS ClassArticleCode,
-        -- ClassOnlyGroup
         CASE
             WHEN ClassRaw  IS NULL OR ClassRaw = ''   THEN 'class empty'
             WHEN ClassRaw  LIKE '%B0'                 THEN 'B0'
@@ -264,7 +268,6 @@ OUTER APPLY (
             WHEN ClassRaw  LIKE '%GA'                 THEN 'GA'
             ELSE 'Other'
         END AS ClassOnlyGroup,
-        -- ArtikelGroup
         CASE
             WHEN NULLIF(REPLACE(REPLACE(REPLACE(ArtikelRaw, '-', ''), ' ', ''), '/', ''), '') IS NULL THEN NULL
             WHEN ArtikelRaw LIKE '%REMEASURE%' THEN 'remeasure'
@@ -284,7 +287,7 @@ OUTER APPLY (
             UPPER(LTRIM(RTRIM(CONVERT(varchar(100), b.ArtikelNummer)))) AS ArtikelRaw
     ) raw
 ) c
-WHERE lbl.LotCounter IS NULL;
+OPTION (RECOMPILE);
 
 CREATE CLUSTERED INDEX IX_LabelMissing_LotBin ON #LabelMissing (SourceDB, LotCounter, [Bin], BinCounter);
 CREATE NONCLUSTERED INDEX IX_LabelMissing_Mix ON #LabelMissing (MixClassGroup, SourceDB, LotCounter)
@@ -547,8 +550,20 @@ def setup_temp_tables(conn, start_date, end_date, equipment_ids):
         subs.append(("  └ INSERT JC01(원본읽기)", time.perf_counter() - t, res.rowcount))
 
     t = time.perf_counter()
-    conn.exec_driver_sql(POST_BASE_SQL)
-    subs.append(("  └ POST(라벨조인+#LabelMissing)", time.perf_counter() - t, None))
+    conn.exec_driver_sql(POST_INDEX_SQL)
+    subs.append(("  └ POST-인덱스생성", time.perf_counter() - t, None))
+
+    t = time.perf_counter()
+    conn.exec_driver_sql(POST_LOTKEYS_SQL)
+    subs.append(("  └ POST-LotKeys", time.perf_counter() - t, None))
+
+    t = time.perf_counter()
+    conn.exec_driver_sql(POST_LABEL_SQL)
+    subs.append(("  └ POST-라벨조인", time.perf_counter() - t, None))
+
+    t = time.perf_counter()
+    conn.exec_driver_sql(POST_LABELMISSING_SQL)
+    subs.append(("  └ POST-LabelMissing빌드", time.perf_counter() - t, None))
 
     count_df = pd.read_sql_query(text(COUNT_SQL), conn)
     return count_df, subs
@@ -744,7 +759,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v32")
+        self.root.title("Sorter Data SQL Runner v33")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
