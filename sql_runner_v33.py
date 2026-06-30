@@ -46,7 +46,7 @@ DB = {
 }
 
 PANELS = [
-    ("LABEL_MISSING", "혼입으로 인한 Label 미발행 확인", 0, 0, 1),
+    ("LABEL_MISSING", "Label 미발행 Lot 이상 감지 (혼입·품번불일치)", 0, 0, 1),
     ("WAFER_DUP", "waferID 중복", 0, 1, 1),
     ("BINCOUNTER_GAP", "bincounter 누락으로 인한 label 미발행", 1, 0, 1),
     ("CLASS_0_120", "0 or null", 1, 1, 1),
