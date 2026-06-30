@@ -320,7 +320,10 @@ PANEL_SQL = {
            ROW_NUMBER() OVER (PARTITION BY SourceDB, LotCounter ORDER BY ClassCount DESC, ClassGroup ASC) AS rn
     FROM ClassCounts
 ), TotalCounts AS (
-    SELECT SourceDB, LotCounter, COUNT_BIG(*) AS TotalClassCount, MAX(BinCounter) AS MaxBinCounter
+    SELECT SourceDB, LotCounter,
+           COUNT_BIG(*) AS TotalClassCount,
+           COUNT(DISTINCT BinCounter) AS DistinctBinCount,
+           MAX(BinCounter) AS MaxBinCounter
     FROM #LabelMissing
     GROUP BY SourceDB, LotCounter
 ), LatestDates AS (
@@ -346,7 +349,7 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        CONVERT(varchar(19), ld.LatestDate, 120) AS LatestDate,
        CONVERT(varchar(10), ld.LatestDate, 120) AS WORKDAY,
        DATEPART(HOUR, ld.LatestDate) AS [HOUR],
-       tc.MaxBinCounter, tc.TotalClassCount,
+       tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
        MAX(CASE WHEN rc.rn = 1 THEN rc.ClassGroup END) AS ClassGroup1,
        MAX(CASE WHEN rc.rn = 1 THEN rc.ClassCount END) AS ClassCount1,
        MAX(CASE WHEN rc.rn = 2 THEN rc.ClassGroup END) AS ClassGroup2,
@@ -359,9 +362,10 @@ JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.L
 JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCounter
 JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
 JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
-WHERE tc.TotalClassCount <> tc.MaxBinCounter
+WHERE (tc.TotalClassCount <> tc.MaxBinCounter          -- 순 증감 이상 (결번·초과)
+    OR tc.TotalClassCount <> tc.DistinctBinCount)      -- 중복 BinCounter 존재
   AND (cgs.MixClassGroupCount > 1 OR ms.MismatchCount > 0)
-GROUP BY li.Site, li.EquipmentID, li.PortID, tc.LotCounter, ld.LatestDate, tc.MaxBinCounter, tc.TotalClassCount,
+GROUP BY li.Site, li.EquipmentID, li.PortID, tc.LotCounter, ld.LatestDate, tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
          ms.MismatchCount, ms.MismatchExample
 ORDER BY MismatchCount DESC, ClassGroup2 DESC, Equipment, tc.LotCounter
 OPTION (RECOMPILE);
