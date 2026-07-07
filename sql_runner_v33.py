@@ -956,6 +956,10 @@ class SQLRunnerApp:
         self.result_filter_frame = Frame(lf_rf)
         self.result_filter_frame.grid(row=0, column=2, sticky=N + W, padx=2, pady=2)
         lf_rf.grid_columnconfigure(2, weight=1)
+        self._lf_rf = lf_rf
+        self._result_cb_widgets = []
+        self._relayout_job = None
+        lf_rf.bind("<Configure>", self._on_result_filter_resize)
 
     def build_site_filter(self, parent):
         pass  # replaced by build_filter_bar
@@ -1050,12 +1054,33 @@ class SQLRunnerApp:
             self.apply_result_filter()
             return
         self.result_filter_note.set(f"{len(eqs)}개")
-        for i, eq in enumerate(eqs):
+        self._result_cb_widgets = []
+        for eq in eqs:
             var = BooleanVar(value=True)
             self.result_equipment_vars[eq] = var
             label = self.eq_label_map.get(eq, eq)
-            Checkbutton(self.result_filter_frame, text=label, variable=var, command=self.apply_result_filter, font=SMALL_FONT).grid(row=i // 7, column=i % 7, sticky=W, padx=2, pady=0)
+            cb = Checkbutton(self.result_filter_frame, text=label, variable=var,
+                              command=self.apply_result_filter, font=SMALL_FONT)
+            self._result_cb_widgets.append(cb)
+        self._relayout_result_filter()
         self.apply_result_filter()
+
+    def _on_result_filter_resize(self, event):
+        if self._relayout_job:
+            self.root.after_cancel(self._relayout_job)
+        self._relayout_job = self.root.after(120, self._relayout_result_filter)
+
+    def _relayout_result_filter(self):
+        self._relayout_job = None
+        widgets = self._result_cb_widgets
+        if not widgets:
+            return
+        avail_width = self._lf_rf.winfo_width() - 90
+        max_w = max(w.winfo_reqwidth() for w in widgets)
+        cols = max(1, avail_width // max_w) if avail_width > 0 else 7
+        for i, w in enumerate(widgets):
+            r, c = divmod(i, cols)
+            w.grid(row=r, column=c, sticky=W, padx=2, pady=0)
 
     def selected_result_equipment(self):
         return [eq for eq, var in self.result_equipment_vars.items() if var.get()]
