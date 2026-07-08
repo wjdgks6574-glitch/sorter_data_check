@@ -1075,9 +1075,11 @@ class SQLRunnerApp:
         widgets = self._result_cb_widgets
         if not widgets:
             return
+        self._lf_rf.update_idletasks()
         avail_width = self._lf_rf.winfo_width() - 90
         max_w = max(w.winfo_reqwidth() for w in widgets)
-        cols = max(1, avail_width // max_w) if avail_width > 0 else 7
+        cols = (avail_width // max_w) if avail_width > 0 else 5
+        cols = max(5, cols)
         for i, w in enumerate(widgets):
             r, c = divmod(i, cols)
             w.grid(row=r, column=c, sticky=W, padx=2, pady=0)
