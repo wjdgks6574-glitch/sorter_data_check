@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v18
-- v17 기반 UI 개선 버전
-- Filter 1,2 컴팩트 정리: 단일 필터 바로 통합
-- 메인 결과: 좌측 탭 리스트(5개) + 우측 단일 패널 표시
-- 원천 DataFrame 다운로드 없음: SQL Server #temp + 최종 결과만 조회
+Sorter Data SQL Runner v33
+- 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
+- UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
+      + 좌측 5탭 리스트 + 우측 단일 결과 패널
+- 파이프라인: SQL Server #temp 테이블(#BaseSorterResult, #LabelMissing 등) 생성 후
+      5개 패널 SQL 순차 조회 (원천 DataFrame 다운로드 없음)
 - Excel(.xlsx) 저장, Ctrl+A/C 복사, 최대화 실행 유지
+- 하단 단계별 소요시간 표시(병목 진단용)
 """
 
 import csv
@@ -46,11 +48,11 @@ DB = {
 }
 
 PANELS = [
-    ("LABEL_MISSING", "Label 미발행 Lot 이상 감지 (혼입·품번불일치)", 0, 0, 1),
-    ("WAFER_DUP", "waferID 중복", 0, 1, 1),
-    ("BINCOUNTER_GAP", "bincounter 누락으로 인한 label 미발행", 1, 0, 1),
-    ("CLASS_0_120", "0 or null", 1, 1, 1),
-    ("OVER_30H", "30시간 넘어서 배출 된 소박스", 2, 0, 2),
+    ("LABEL_MISSING", "Label 미발행 Lot 이상 감지 (혼입·품번불일치)"),
+    ("WAFER_DUP", "waferID 중복"),
+    ("BINCOUNTER_GAP", "bincounter 누락으로 인한 label 미발행"),
+    ("CLASS_0_120", "0 or null"),
+    ("OVER_30H", "30시간 넘어서 배출 된 소박스"),
 ]
 PANEL_KEYS = [p[0] for p in PANELS]
 PANEL_TITLE = {p[0]: p[1] for p in PANELS}
@@ -298,8 +300,6 @@ CREATE NONCLUSTERED INDEX IX_LabelMissing_Mix ON #LabelMissing (MixClassGroup, S
 COUNT_SQL = """
 SELECT
     COUNT_BIG(*) AS BaseRows,
-    CAST(0 AS bigint) AS BaseLots,
-    CAST(0 AS bigint) AS BaseWafers,
     (SELECT COUNT_BIG(*) FROM #LabelMissing) AS LabelMissingRows
 FROM #BaseSorterResult;
 """
@@ -509,21 +509,6 @@ def build_engine():
     return create_engine("mssql+pyodbc:///?odbc_connect=" + quote_plus(odbc), pool_pre_ping=True, fast_executemany=True)
 
 
-def mapping_df():
-    df = pd.DataFrame(EQUIPMENT_ROWS, columns=["EquipmentID", "PortID", "Machine", "Sorter"])
-    df["PortID"] = pd.to_numeric(df["PortID"], errors="coerce").astype("Int64")
-    return df
-
-
-def machine_of_equipment(equipment_id: str) -> str:
-    for machine, equipment_set in MACHINE_TO_EQUIPMENT.items():
-        if equipment_id in equipment_set:
-            return machine
-    m = mapping_df()
-    hit = m[m["EquipmentID"] == equipment_id]
-    return "" if hit.empty else str(hit.iloc[0]["Machine"])
-
-
 def split_by_site(equipment_ids):
     return (
         sorted([x for x in equipment_ids if x.startswith("JC01-")]),
@@ -641,7 +626,7 @@ class RunConfig:
 
 
 class ResultPanel:
-    def __init__(self, app, parent, key, title, row, col, colspan):
+    def __init__(self, app, parent, key, title):
         self.app = app
         self.key = key
         self.title = title
@@ -649,8 +634,8 @@ class ResultPanel:
         self.status_var = StringVar(value="대기")
 
         self.box = Frame(parent, bd=1, relief="solid")
-        # 탭 전환: 처음에는 grid로 배치하되 숨김은 grid_remove로 처리
-        self.box.grid(row=row, column=col, columnspan=colspan, sticky=N + S + E + W, padx=4, pady=4)
+        # 탭 전환: 컨테이너의 0,0에 배치하되 숨김은 grid_remove로 처리
+        self.box.grid(row=0, column=0, sticky=N + S + E + W, padx=4, pady=4)
         self.box.grid_columnconfigure(0, weight=1)
         self.box.grid_rowconfigure(1, weight=1)
 
@@ -775,7 +760,6 @@ class SQLRunnerApp:
         self.site_vars = {s: BooleanVar(value=True) for s in SITE_OPTIONS}
         self.machine_vars = {m: BooleanVar(value=True) for m in MACHINE_OPTIONS}
         # equipment_vars: 라벨(2차 변경명) 단위로 체크박스 생성
-        self._eq_row_list = EQUIPMENT_ROWS
         all_labels_ordered = []
         seen = set()
         for eq, port, machine, label in EQUIPMENT_ROWS:
@@ -856,7 +840,7 @@ class SQLRunnerApp:
                                    selectbackground="#2980b9", selectforeground="white",
                                    bg="#ecf0f1", fg="#2c3e50", highlightthickness=0)
         self.tab_listbox.pack(fill=BOTH, expand=True, pady=4, padx=4)
-        for key, title, *_ in PANELS:
+        for key, title in PANELS:
             self.tab_listbox.insert(END, f"  {title}")
         self.tab_listbox.bind("<<ListboxSelect>>", self._on_tab_select)
 
@@ -864,7 +848,7 @@ class SQLRunnerApp:
         self.tab_status_labels = {}
         status_frame = Frame(tab_frame, bg="#ecf0f1")
         status_frame.pack(fill=X, padx=4, pady=(0, 4))
-        for i, (key, title, *_) in enumerate(PANELS):
+        for key, title in PANELS:
             lbl = Label(status_frame, text="대기", font=("맑은 고딕", 7),
                         fg="#888888", bg="#ecf0f1", anchor="w")
             lbl.pack(fill=X)
@@ -877,8 +861,8 @@ class SQLRunnerApp:
         self.panel_container.grid_columnconfigure(0, weight=1)
 
         # ResultPanel 생성 (숨김 상태로)
-        for key, title, row, col, colspan in PANELS:
-            self.panels[key] = ResultPanel(self, self.panel_container, key, title, 0, 0, 1)
+        for key, title in PANELS:
+            self.panels[key] = ResultPanel(self, self.panel_container, key, title)
             self.panels[key].hide()
 
         # 첫 번째 탭 선택
@@ -914,10 +898,9 @@ class SQLRunnerApp:
 
         lf_mach = ttk.LabelFrame(left_col, text="Machine")
         lf_mach.pack(side=TOP, fill=X)
-        # NoATW / ATW → row 0, JC2 6,7line → row 1
-        _mach_pos = {"NoATW": (0, 0), "ATW": (0, 1), "JC2 6,7line": (1, 0)}
+        # NoATW / ATW → row 0, JC2 6,7line → row 1 (_MACH_GRID_POS 참조)
         for m in MACHINE_OPTIONS:
-            r, c = _mach_pos[m]
+            r, c = self._MACH_GRID_POS[m]
             cb = Checkbutton(lf_mach, text=m, variable=self.machine_vars[m],
                              command=self.on_filter_change)
             cb.grid(row=r, column=c, sticky=W, padx=4, pady=2)
@@ -961,19 +944,10 @@ class SQLRunnerApp:
         self._relayout_job = None
         lf_rf.bind("<Configure>", self._on_result_filter_resize)
 
-    def build_site_filter(self, parent):
-        pass  # replaced by build_filter_bar
-
-    def build_machine_filter(self, parent):
-        pass  # replaced by build_filter_bar
-
-    def build_equipment_filter(self, parent):
-        pass  # replaced by build_filter_bar
-
-    def build_result_filter(self, parent):
-        pass  # replaced by build_filter_bar
-
     # -------------------------- filter --------------------------
+    # Machine 체크박스 배치: NoATW/ATW → 0행, JC2 6,7line → 1행
+    _MACH_GRID_POS = {"NoATW": (0, 0), "ATW": (0, 1), "JC2 6,7line": (1, 0)}
+
     def machine_visible(self, machine):
         return not (machine == "JC2 6,7line" and not self.site_vars["JC02"].get())
 
@@ -993,15 +967,13 @@ class SQLRunnerApp:
                 result.append(label)
         return result
 
-    _mach_grid_pos = {"NoATW": (0, 0), "ATW": (0, 1), "JC2 6,7line": (1, 0)}
-
     def on_filter_change(self):
         for m in MACHINE_OPTIONS:
             cb = self.machine_cbs.get(m)
             if not cb:
                 continue
             if self.machine_visible(m):
-                r, c = self._mach_grid_pos[m]
+                r, c = self._MACH_GRID_POS[m]
                 cb.grid(row=r, column=c, sticky=W, padx=4, pady=2)
             else:
                 cb.grid_remove()
@@ -1113,10 +1085,7 @@ class SQLRunnerApp:
             if elapsed is not None:
                 status += f" / {elapsed:.1f}초"
             self.panels[key].load(shown, status=status)
-            # 탭 상태 레이블 업데이트
-            row_count = len(shown)
-            color = "#27ae60" if row_count > 0 else "#888888"
-            self._update_tab_status(key, f"{row_count:,} rows", color)
+            self._set_tab_row_status(key, len(shown))
         self.combined_df = self.make_combined(display_results, display_ready=True)
 
     # -------------------------- UI helpers --------------------------
@@ -1139,6 +1108,11 @@ class SQLRunnerApp:
         lbl = self.tab_status_labels.get(key)
         if lbl:
             lbl.config(text=text, fg=color)
+
+    def _set_tab_row_status(self, key, row_count, suffix=""):
+        """행 수 기준 탭 상태 갱신 (0건이면 회색, 있으면 녹색)"""
+        color = "#27ae60" if row_count > 0 else "#888888"
+        self._update_tab_status(key, f"{row_count:,} rows{suffix}", color)
 
     def set_active_panel(self, panel):
         self.active_panel = panel
@@ -1242,9 +1216,7 @@ class SQLRunnerApp:
     def apply_panel_now(self, key, raw, elapsed):
         shown = display_df(raw)
         self.panels[key].load(shown, status=f"{len(shown):,} rows / {elapsed:.1f}초")
-        row_count = len(shown)
-        color = "#27ae60" if row_count > 0 else "#888888"
-        self._update_tab_status(key, f"{row_count:,} rows / {elapsed:.1f}초", color)
+        self._set_tab_row_status(key, len(shown), suffix=f" / {elapsed:.1f}초")
 
     def finish_run(self, results, timing_df, total_sec, fail_count):
         # results는 raw 그대로 저장 (apply_result_filter에서 display_df가 fix_types 처리)
