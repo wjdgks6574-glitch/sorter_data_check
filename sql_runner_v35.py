@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v34
+Sorter Data SQL Runner v35
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -49,6 +49,7 @@ DB = {
 
 PANELS = [
     ("LABEL_MISSING", "Label 미발행 Lot 이상 감지 (혼입·품번불일치)"),
+    ("LABEL_ISSUED_ANOMALY", "Label 발행 완료 Lot 이상 감지 (혼입·품번불일치)"),
     ("WAFER_DUP", "waferID 중복"),
     ("BINCOUNTER_GAP", "bincounter 누락으로 인한 label 미발행"),
     ("CLASS_0_120", "0 or null"),
@@ -128,6 +129,8 @@ MACHINE_TO_EQUIPMENT = {
 
 DROP_CREATE_SQL = """
 SET NOCOUNT ON;
+IF OBJECT_ID('tempdb..#ClassifiedBase') IS NOT NULL DROP TABLE #ClassifiedBase;
+IF OBJECT_ID('tempdb..#LabelIssuedAnomaly') IS NOT NULL DROP TABLE #LabelIssuedAnomaly;
 IF OBJECT_ID('tempdb..#LabelMissing') IS NOT NULL DROP TABLE #LabelMissing;
 IF OBJECT_ID('tempdb..#BaseSorterLabel') IS NOT NULL DROP TABLE #BaseSorterLabel;
 IF OBJECT_ID('tempdb..#LotKeys') IS NOT NULL DROP TABLE #LotKeys;
@@ -211,9 +214,10 @@ GROUP BY SourceDB, LotCounter;
 CREATE UNIQUE CLUSTERED INDEX IX_Label_Lot ON #BaseSorterLabel (SourceDB, LotCounter);
 """
 
-POST_LABELMISSING_SQL = """
+POST_CLASSIFY_SQL = """
 SET NOCOUNT ON;
--- NOT EXISTS로 라벨 없는 행만 먼저 추려낸 후 OUTER APPLY 실행 (LEFT JOIN+IS NULL 대비 OUTER APPLY 실행 횟수 감소)
+-- 분류 계산(OUTER APPLY)을 대상 전체 행에 대해 1회만 수행 후,
+-- 라벨 발행 여부(LabelIssued)로 분리해 #LabelMissing / #LabelIssuedAnomaly 생성
 SELECT
     b.SourceDB, b.Site, b.[Date], b.EquipmentID, b.PortID, b.LotCounter,
     b.[Class], b.BinCounter, b.[Comment], b.ArtikelNummer, b.WaferID, b.[Bin],
@@ -233,18 +237,18 @@ SELECT
           OR c.ClassOnlyGroup IS NULL                  THEN 0
         WHEN c.ArtikelGroup <> c.ClassOnlyGroup        THEN 1
         ELSE 0
-    END AS ArticleMismatch
-INTO #LabelMissing
+    END AS ArticleMismatch,
+    CASE WHEN lbl.LotCounter IS NULL THEN 0 ELSE 1 END AS LabelIssued,
+    lbl.Datum AS LabelDatum
+INTO #ClassifiedBase
 FROM (
     SELECT b.*
     FROM #BaseSorterResult b
     WHERE b.[Comment] < 9000000
       AND b.LotCounter IS NOT NULL
-      AND NOT EXISTS (
-          SELECT 1 FROM #BaseSorterLabel lbl
-          WHERE lbl.SourceDB = b.SourceDB AND lbl.LotCounter = b.LotCounter
-      )
 ) b
+LEFT JOIN #BaseSorterLabel lbl
+       ON lbl.SourceDB = b.SourceDB AND lbl.LotCounter = b.LotCounter
 OUTER APPLY (
     SELECT
         ClassRaw,
@@ -291,16 +295,39 @@ OUTER APPLY (
 ) c
 OPTION (RECOMPILE);
 
+CREATE NONCLUSTERED INDEX IX_ClassifiedBase_Label ON #ClassifiedBase (LabelIssued, SourceDB, LotCounter);
+
+SELECT SourceDB, Site, [Date], EquipmentID, PortID, LotCounter, [Class], BinCounter, [Comment],
+       ArtikelNummer, WaferID, [Bin], ClassRaw, ArtikelCode, ClassArticleCode, ClassGroup,
+       MixClassGroup, ArticleMismatch
+INTO #LabelMissing
+FROM #ClassifiedBase
+WHERE LabelIssued = 0;
+
 CREATE CLUSTERED INDEX IX_LabelMissing_LotBin ON #LabelMissing (SourceDB, LotCounter, [Bin], BinCounter);
 CREATE NONCLUSTERED INDEX IX_LabelMissing_Mix ON #LabelMissing (MixClassGroup, SourceDB, LotCounter)
     INCLUDE ([Date], BinCounter, EquipmentID, PortID, ArticleMismatch, ArtikelCode, ClassArticleCode);
+
+SELECT SourceDB, Site, [Date], EquipmentID, PortID, LotCounter, [Class], BinCounter, [Comment],
+       ArtikelNummer, WaferID, [Bin], ClassRaw, ArtikelCode, ClassArticleCode, ClassGroup,
+       MixClassGroup, ArticleMismatch, LabelDatum
+INTO #LabelIssuedAnomaly
+FROM #ClassifiedBase
+WHERE LabelIssued = 1;
+
+CREATE CLUSTERED INDEX IX_LabelIssuedAnomaly_LotBin ON #LabelIssuedAnomaly (SourceDB, LotCounter, [Bin], BinCounter);
+CREATE NONCLUSTERED INDEX IX_LabelIssuedAnomaly_Mix ON #LabelIssuedAnomaly (MixClassGroup, SourceDB, LotCounter)
+    INCLUDE ([Date], BinCounter, EquipmentID, PortID, ArticleMismatch, ArtikelCode, ClassArticleCode, LabelDatum);
+
+DROP TABLE #ClassifiedBase;
 """
 
 
 COUNT_SQL = """
 SELECT
     COUNT_BIG(*) AS BaseRows,
-    (SELECT COUNT_BIG(*) FROM #LabelMissing) AS LabelMissingRows
+    (SELECT COUNT_BIG(*) FROM #LabelMissing) AS LabelMissingRows,
+    (SELECT COUNT_BIG(*) FROM #LabelIssuedAnomaly) AS LabelIssuedAnomalyRows
 FROM #BaseSorterResult;
 """
 
@@ -366,6 +393,75 @@ JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCou
 -- (BinCounter 이상은 BINCOUNTER_GAP 패널이 별도 담당)
 WHERE (cgs.MixClassGroupCount > 1 OR ms.MismatchCount > 0)
 GROUP BY li.Site, li.EquipmentID, li.PortID, tc.LotCounter, ld.LatestDate, tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
+         ms.MismatchCount, ms.MismatchExample
+ORDER BY MismatchCount DESC, ClassGroup2 DESC, Equipment, tc.LotCounter
+OPTION (RECOMPILE);
+""",
+    "LABEL_ISSUED_ANOMALY": """
+;WITH ClassCounts AS (
+    SELECT SourceDB, LotCounter, MixClassGroup AS ClassGroup, COUNT_BIG(*) AS ClassCount
+    FROM #LabelIssuedAnomaly
+    WHERE MixClassGroup IS NOT NULL
+    GROUP BY SourceDB, LotCounter, MixClassGroup
+), ClassGroupStats AS (
+    SELECT SourceDB, LotCounter, COUNT_BIG(*) AS MixClassGroupCount
+    FROM ClassCounts
+    GROUP BY SourceDB, LotCounter
+), RankedClasses AS (
+    SELECT SourceDB, LotCounter, ClassGroup, ClassCount,
+           ROW_NUMBER() OVER (PARTITION BY SourceDB, LotCounter ORDER BY ClassCount DESC, ClassGroup ASC) AS rn
+    FROM ClassCounts
+), TotalCounts AS (
+    SELECT SourceDB, LotCounter,
+           COUNT_BIG(*) AS TotalClassCount,
+           COUNT(DISTINCT BinCounter) AS DistinctBinCount,
+           MAX(BinCounter) AS MaxBinCounter
+    FROM #LabelIssuedAnomaly
+    GROUP BY SourceDB, LotCounter
+), LatestDates AS (
+    SELECT SourceDB, LotCounter, MAX([Date]) AS LatestDate
+    FROM #LabelIssuedAnomaly
+    GROUP BY SourceDB, LotCounter
+), LotInfo AS (
+    SELECT SourceDB, LotCounter, MIN(Site) AS Site, MIN(EquipmentID) AS EquipmentID, MIN(PortID) AS PortID
+    FROM #LabelIssuedAnomaly
+    GROUP BY SourceDB, LotCounter
+), MismatchStats AS (
+    SELECT SourceDB, LotCounter,
+           SUM(CASE WHEN ArticleMismatch = 1 THEN 1 ELSE 0 END) AS MismatchCount,
+           MIN(CASE WHEN ArticleMismatch = 1
+                    THEN CONCAT('BinCounter=', CONVERT(varchar(30), BinCounter), ' ', ArtikelCode, '<>', ClassArticleCode)
+               END) AS MismatchExample
+    FROM #LabelIssuedAnomaly
+    GROUP BY SourceDB, LotCounter
+), LabelInfo AS (
+    SELECT SourceDB, LotCounter, MAX(LabelDatum) AS LabelDatum
+    FROM #LabelIssuedAnomaly
+    GROUP BY SourceDB, LotCounter
+)
+SELECT li.Site, li.EquipmentID, li.PortID,
+       REPLACE(li.EquipmentID, '-CS-', '-') AS Equipment,
+       tc.LotCounter,
+       CONVERT(varchar(19), lf.LabelDatum, 120) AS LabelDatum,
+       CONVERT(varchar(19), ld.LatestDate, 120) AS LatestDate,
+       CONVERT(varchar(10), ld.LatestDate, 120) AS WORKDAY,
+       DATEPART(HOUR, ld.LatestDate) AS [HOUR],
+       tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
+       MAX(CASE WHEN rc.rn = 1 THEN rc.ClassGroup END) AS ClassGroup1,
+       MAX(CASE WHEN rc.rn = 1 THEN rc.ClassCount END) AS ClassCount1,
+       MAX(CASE WHEN rc.rn = 2 THEN rc.ClassGroup END) AS ClassGroup2,
+       MAX(CASE WHEN rc.rn = 2 THEN rc.ClassCount END) AS ClassCount2,
+       ms.MismatchCount,
+       ms.MismatchExample
+FROM RankedClasses rc
+JOIN TotalCounts tc ON tc.SourceDB = rc.SourceDB AND tc.LotCounter = rc.LotCounter
+JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
+JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCounter
+JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
+JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
+JOIN LabelInfo lf ON lf.SourceDB = tc.SourceDB AND lf.LotCounter = tc.LotCounter
+WHERE (cgs.MixClassGroupCount > 1 OR ms.MismatchCount > 0)
+GROUP BY li.Site, li.EquipmentID, li.PortID, tc.LotCounter, lf.LabelDatum, ld.LatestDate, tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
          ms.MismatchCount, ms.MismatchExample
 ORDER BY MismatchCount DESC, ClassGroup2 DESC, Equipment, tc.LotCounter
 OPTION (RECOMPILE);
@@ -551,8 +647,8 @@ def setup_temp_tables(conn, start_date, end_date, equipment_ids):
     subs.append(("  └ POST-라벨조인", time.perf_counter() - t, None))
 
     t = time.perf_counter()
-    conn.exec_driver_sql(POST_LABELMISSING_SQL)
-    subs.append(("  └ POST-LabelMissing빌드", time.perf_counter() - t, None))
+    conn.exec_driver_sql(POST_CLASSIFY_SQL)
+    subs.append(("  └ POST-분류(미발행+발행완료)빌드", time.perf_counter() - t, None))
 
     count_df = pd.read_sql_query(text(COUNT_SQL), conn)
     return count_df, subs
@@ -748,7 +844,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v34")
+        self.root.title("Sorter Data SQL Runner v35")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
@@ -1172,7 +1268,7 @@ class SQLRunnerApp:
                 count_df, subs = setup_temp_tables(conn, cfg.start_date, cfg.end_date, cfg.equipment)
                 sec = time.perf_counter() - t
                 row = count_df.iloc[0].to_dict() if not count_df.empty else {}
-                self.ui(self.log, f"Base 생성 완료: {int(row.get('BaseRows', 0)):,} rows / label-missing {int(row.get('LabelMissingRows', 0)):,} rows / {sec:.1f}초")
+                self.ui(self.log, f"Base 생성 완료: {int(row.get('BaseRows', 0)):,} rows / label-missing {int(row.get('LabelMissingRows', 0)):,} rows / label-issued {int(row.get('LabelIssuedAnomalyRows', 0)):,} rows / {sec:.1f}초")
                 timing.append({"Step": "Base temp", "Seconds": round(sec, 1), "Rows": int(row.get("BaseRows", 0))})
                 # 하위 단계별 시간 (병목 진단용)
                 for step, ssec, srows in subs:
