@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v33
+Sorter Data SQL Runner v34
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -362,9 +362,9 @@ JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.L
 JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCounter
 JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
 JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
-WHERE (tc.TotalClassCount <> tc.MaxBinCounter          -- 순 증감 이상 (결번·초과)
-    OR tc.TotalClassCount <> tc.DistinctBinCount)      -- 중복 BinCounter 존재
-  AND (cgs.MixClassGroupCount > 1 OR ms.MismatchCount > 0)
+-- BinCounter 이상 여부와 무관하게 혼입/품번불일치만으로 판정
+-- (BinCounter 이상은 BINCOUNTER_GAP 패널이 별도 담당)
+WHERE (cgs.MixClassGroupCount > 1 OR ms.MismatchCount > 0)
 GROUP BY li.Site, li.EquipmentID, li.PortID, tc.LotCounter, ld.LatestDate, tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
          ms.MismatchCount, ms.MismatchExample
 ORDER BY MismatchCount DESC, ClassGroup2 DESC, Equipment, tc.LotCounter
@@ -748,7 +748,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v33")
+        self.root.title("Sorter Data SQL Runner v34")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
