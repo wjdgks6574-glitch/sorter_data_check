@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v39
+Sorter Data SQL Runner v40
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -49,7 +49,7 @@ DB = {
 
 PANELS = [
     ("LABEL_MISSING", "Label 미발행 Lot 이상 감지 (혼입·품번불일치)"),
-    ("LABEL_ISSUED_ANOMALY", "Label 발행 완료 Lot 이상 감지 (혼입·품번불일치)"),
+    ("LABEL_ISSUED_ANOMALY", "label 발행 이상"),
     ("WAFER_DUP", "waferID 중복"),
     ("BINCOUNTER_GAP", "bincounter 누락으로 인한 label 미발행"),
     ("CLASS_0_120", "0 or null"),
@@ -431,86 +431,93 @@ ORDER BY MismatchCount DESC, Equipment, tc.LotCounter
 OPTION (RECOMPILE);
 """,
     "LABEL_ISSUED_ANOMALY": """
-;WITH ClassCounts AS (
-    SELECT SourceDB, LotCounter, MixClassGroup AS ClassGroup, COUNT_BIG(*) AS ClassCount
-    FROM #LabelIssuedAnomaly
-    WHERE MixClassGroup IS NOT NULL
-    GROUP BY SourceDB, LotCounter, MixClassGroup
-), ClassGroupStats AS (
-    SELECT SourceDB, LotCounter, COUNT_BIG(*) AS MixClassGroupCount
-    FROM ClassCounts
-    GROUP BY SourceDB, LotCounter
-), ClassGroupList AS (
-    SELECT cc.SourceDB, cc.LotCounter,
-           STUFF((
-               SELECT ', ' + cc2.ClassGroup + ':' + CONVERT(varchar(20), cc2.ClassCount)
-               FROM ClassCounts cc2
-               WHERE cc2.SourceDB = cc.SourceDB AND cc2.LotCounter = cc.LotCounter
-               ORDER BY cc2.ClassCount DESC
-               FOR XML PATH(''), TYPE
-           ).value('.', 'varchar(max)'), 1, 2, '') AS ClassGroups
-    FROM ClassCounts cc
-    GROUP BY cc.SourceDB, cc.LotCounter
-), TotalCounts AS (
+;WITH LotFlags AS (
+    -- Lot 단위 Klasse/ArtikelNummer 토큰 존재 여부 (전부 대문자, 특수문자 제거 없이 원문 포함 여부로 판정)
     SELECT SourceDB, LotCounter,
-           COUNT_BIG(*) AS TotalClassCount,
-           COUNT(DISTINCT BinCounter) AS DistinctBinCount,
-           MAX(BinCounter) AS MaxBinCounter
+           MAX(CASE WHEN ClassRaw LIKE '%A-2%' THEN 1 ELSE 0 END) AS L_A2,
+           MAX(CASE WHEN ClassRaw LIKE '%A-1%' THEN 1 ELSE 0 END) AS L_A1,
+           MAX(CASE WHEN ClassRaw LIKE '%U-L%' THEN 1 ELSE 0 END) AS L_UL,
+           MAX(CASE WHEN ClassRaw LIKE '%B-0%' THEN 1 ELSE 0 END) AS L_B0,
+           MAX(CASE WHEN ClassRaw LIKE '%L-E%' THEN 1 ELSE 0 END) AS L_LE,
+           MAX(CASE WHEN ClassRaw LIKE '%/EL' THEN 1 ELSE 0 END) AS L_EL,
+           MAX(CASE WHEN ClassRaw LIKE 'H-%' AND ArtikelCode = 'RWM' THEN 1 ELSE 0 END) AS L_H_RWM,
+           MAX(CASE WHEN ClassRaw LIKE 'H-%' AND ArtikelCode = 'REMEASURE' THEN 1 ELSE 0 END) AS L_H_REMEASURE,
+           MAX(CASE WHEN ArtikelCode LIKE '%UL%' THEN 1 ELSE 0 END) AS A_UL,
+           MAX(CASE WHEN ArtikelCode LIKE '%A2%' THEN 1 ELSE 0 END) AS A_A2,
+           MAX(CASE WHEN ArtikelCode LIKE '%A1%' THEN 1 ELSE 0 END) AS A_A1,
+           MAX(CASE WHEN ArtikelCode LIKE '%B0%' THEN 1 ELSE 0 END) AS A_B0,
+           MAX(CASE WHEN ArtikelCode LIKE '%RWM%' THEN 1 ELSE 0 END) AS A_RWM,
+           MAX(CASE WHEN ArtikelCode LIKE '%LE%' THEN 1 ELSE 0 END) AS A_LE,
+           MAX(CASE WHEN ArtikelCode LIKE '%REMEASURE%' THEN 1 ELSE 0 END) AS A_REMEASURE,
+           MAX(CASE WHEN ArtikelCode LIKE '%GA%' THEN 1 ELSE 0 END) AS A_GA
     FROM #LabelIssuedAnomaly
     GROUP BY SourceDB, LotCounter
-), LatestDates AS (
-    SELECT SourceDB, LotCounter, MAX([Date]) AS LatestDate
+), LotAnomaly AS (
+    SELECT SourceDB, LotCounter,
+           CASE WHEN
+                  (L_A2 = 1 AND (A_UL=1 OR A_A1=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1))
+               OR (L_A1 = 1 AND (A_UL=1 OR A_A2=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1))
+               OR (L_UL = 1 AND (A_A2=1 OR A_A1=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1))
+               OR (L_B0 = 1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1))
+               OR (L_LE = 1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_B0=1 OR A_REMEASURE=1 OR A_GA=1))
+               OR (L_EL = 1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_REMEASURE=1 OR A_GA=1))
+               OR (L_H_RWM = 1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_REMEASURE=1 OR A_GA=1))
+               OR (L_H_REMEASURE = 1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_RWM=1 OR A_GA=1))
+                THEN 1 ELSE 0
+           END AS RuleViolation,
+           STUFF(
+               CASE WHEN L_A2=1 AND (A_UL=1 OR A_A1=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',A-2 Klasse+금지Artikel' ELSE '' END +
+               CASE WHEN L_A1=1 AND (A_UL=1 OR A_A2=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',A-1 Klasse+금지Artikel' ELSE '' END +
+               CASE WHEN L_UL=1 AND (A_A2=1 OR A_A1=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',U-L Klasse+금지Artikel' ELSE '' END +
+               CASE WHEN L_B0=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',B-0 Klasse+금지Artikel' ELSE '' END +
+               CASE WHEN L_LE=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_B0=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',L-E Klasse+금지Artikel' ELSE '' END +
+               CASE WHEN L_EL=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',/EL Klasse+금지Artikel' ELSE '' END +
+               CASE WHEN L_H_RWM=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',H-RWM+타등급혼재' ELSE '' END +
+               CASE WHEN L_H_REMEASURE=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_RWM=1 OR A_GA=1) THEN ',H-REMEASURE+타등급혼재' ELSE '' END
+           , 1, 1, '') AS ViolationDetail
+    FROM LotFlags
+), QualifyingLots AS (
+    -- 요구사항 2: Klasse에 A-2/U-L/A-1/B0 포함된 Lot은 무조건 종류별 breakdown 대상
+    -- + 1번 규칙 위반 Lot(L-E/EL/H- 계열 포함)도 함께 포함
+    SELECT lf.SourceDB, lf.LotCounter, la.RuleViolation, la.ViolationDetail
+    FROM LotFlags lf
+    JOIN LotAnomaly la ON la.SourceDB = lf.SourceDB AND la.LotCounter = lf.LotCounter
+    WHERE la.RuleViolation = 1 OR lf.L_A2 = 1 OR lf.L_A1 = 1 OR lf.L_UL = 1 OR lf.L_B0 = 1
+), LabelInfo AS (
+    SELECT SourceDB, LotCounter, MAX(LabelDatum) AS LabelDatum
     FROM #LabelIssuedAnomaly
     GROUP BY SourceDB, LotCounter
 ), LotInfo AS (
     SELECT SourceDB, LotCounter, MIN(Site) AS Site, MIN(EquipmentID) AS EquipmentID, MIN(PortID) AS PortID
     FROM #LabelIssuedAnomaly
     GROUP BY SourceDB, LotCounter
-), MismatchStats AS (
-    SELECT SourceDB, LotCounter,
-           SUM(CASE WHEN ArticleMismatch = 1 THEN 1 ELSE 0 END) AS MismatchCount,
-           MIN(CASE WHEN ArticleMismatch = 1
-                    THEN CONCAT('BinCounter=', CONVERT(varchar(30), BinCounter), ' ', ArtikelCode, '<>', ClassArticleCode)
-               END) AS MismatchExample
-    FROM #LabelIssuedAnomaly
-    GROUP BY SourceDB, LotCounter
-), LabelInfo AS (
-    SELECT SourceDB, LotCounter, MAX(LabelDatum) AS LabelDatum
-    FROM #LabelIssuedAnomaly
-    GROUP BY SourceDB, LotCounter
-), RemeasureStats AS (
-    SELECT SourceDB, LotCounter,
-           SUM(CASE WHEN ArtikelCode IN ('REMEASURE', 'RWM') THEN 1 ELSE 0 END) AS RemeasureCount,
-           SUM(CASE WHEN ArtikelCode NOT IN ('REMEASURE', 'RWM') OR ArtikelCode IS NULL THEN 1 ELSE 0 END) AS NonRemeasureCount
-    FROM #LabelIssuedAnomaly
-    GROUP BY SourceDB, LotCounter
 )
+-- Lot + ArtikelNummer 종류별로 행 분리 (요구사항 2)
 SELECT li.Site, li.EquipmentID, li.PortID,
        REPLACE(li.EquipmentID, '-CS-', '-') AS Equipment,
-       tc.LotCounter,
+       t.LotCounter,
+       t.ArtikelNummer,
+       COUNT_BIG(*) AS ArtikelCount,
+       MIN(t.[Bin]) AS BinMin, MAX(t.[Bin]) AS BinMax,
+       MIN(t.BinCounter) AS MinBinCounter, MAX(t.BinCounter) AS MaxBinCounter,
+       STUFF((
+           SELECT ',' + CONVERT(varchar(20), x.BinCounter)
+           FROM #LabelIssuedAnomaly x
+           WHERE x.SourceDB = t.SourceDB AND x.LotCounter = t.LotCounter AND x.ArtikelNummer = t.ArtikelNummer
+           ORDER BY x.BinCounter
+           FOR XML PATH(''), TYPE
+       ).value('.', 'varchar(max)'), 1, 1, '') AS BinCounterList,
+       CONVERT(varchar(19), MAX(t.[Date]), 120) AS LatestDate,
        CONVERT(varchar(19), lf.LabelDatum, 120) AS LabelDatum,
-       CONVERT(varchar(19), ld.LatestDate, 120) AS LatestDate,
-       CONVERT(varchar(10), ld.LatestDate, 120) AS WORKDAY,
-       DATEPART(HOUR, ld.LatestDate) AS [HOUR],
-       tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
-       ISNULL(cgs.MixClassGroupCount, 0) AS MixClassGroupCount,
-       cgl.ClassGroups,
-       ms.MismatchCount,
-       ms.MismatchExample,
-       CASE WHEN rs.RemeasureCount > 0 AND rs.NonRemeasureCount > 0 THEN 1 ELSE 0 END AS RemeasureMixed,
-       rs.RemeasureCount
-FROM TotalCounts tc
-LEFT JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
-LEFT JOIN ClassGroupList cgl ON cgl.SourceDB = tc.SourceDB AND cgl.LotCounter = tc.LotCounter
-JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCounter
-JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
-JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
-JOIN LabelInfo lf ON lf.SourceDB = tc.SourceDB AND lf.LotCounter = tc.LotCounter
-JOIN RemeasureStats rs ON rs.SourceDB = tc.SourceDB AND rs.LotCounter = tc.LotCounter
-WHERE (ISNULL(cgs.MixClassGroupCount, 0) > 1
-    OR ms.MismatchCount > 0
-    OR (rs.RemeasureCount > 0 AND rs.NonRemeasureCount > 0))
-ORDER BY MismatchCount DESC, Equipment, tc.LotCounter
+       ql.RuleViolation,
+       ql.ViolationDetail
+FROM #LabelIssuedAnomaly t
+JOIN QualifyingLots ql ON ql.SourceDB = t.SourceDB AND ql.LotCounter = t.LotCounter
+JOIN LotInfo li ON li.SourceDB = t.SourceDB AND li.LotCounter = t.LotCounter
+JOIN LabelInfo lf ON lf.SourceDB = t.SourceDB AND lf.LotCounter = t.LotCounter
+GROUP BY li.Site, li.EquipmentID, li.PortID, t.SourceDB, t.LotCounter, t.ArtikelNummer,
+         lf.LabelDatum, ql.RuleViolation, ql.ViolationDetail
+ORDER BY ql.RuleViolation DESC, Equipment, t.LotCounter, ArtikelCount DESC
 OPTION (RECOMPILE);
 """,
     "WAFER_DUP": """
@@ -891,7 +898,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v39")
+        self.root.title("Sorter Data SQL Runner v40")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
