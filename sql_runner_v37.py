@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v36
+Sorter Data SQL Runner v37
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -350,10 +350,18 @@ PANEL_SQL = {
     SELECT SourceDB, LotCounter, COUNT_BIG(*) AS MixClassGroupCount
     FROM ClassCounts
     GROUP BY SourceDB, LotCounter
-), RankedClasses AS (
-    SELECT SourceDB, LotCounter, ClassGroup, ClassCount,
-           ROW_NUMBER() OVER (PARTITION BY SourceDB, LotCounter ORDER BY ClassCount DESC, ClassGroup ASC) AS rn
-    FROM ClassCounts
+), ClassGroupList AS (
+    -- Lot별 모든 등급을 "등급:건수" 형태로 나열 (건수 많은 순)
+    SELECT cc.SourceDB, cc.LotCounter,
+           STUFF((
+               SELECT ', ' + cc2.ClassGroup + ':' + CONVERT(varchar(20), cc2.ClassCount)
+               FROM ClassCounts cc2
+               WHERE cc2.SourceDB = cc.SourceDB AND cc2.LotCounter = cc.LotCounter
+               ORDER BY cc2.ClassCount DESC
+               FOR XML PATH(''), TYPE
+           ).value('.', 'varchar(max)'), 1, 2, '') AS ClassGroups
+    FROM ClassCounts cc
+    GROUP BY cc.SourceDB, cc.LotCounter
 ), TotalCounts AS (
     SELECT SourceDB, LotCounter,
            COUNT_BIG(*) AS TotalClassCount,
@@ -385,24 +393,21 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        CONVERT(varchar(10), ld.LatestDate, 120) AS WORKDAY,
        DATEPART(HOUR, ld.LatestDate) AS [HOUR],
        tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
-       MAX(CASE WHEN rc.rn = 1 THEN rc.ClassGroup END) AS ClassGroup1,
-       MAX(CASE WHEN rc.rn = 1 THEN rc.ClassCount END) AS ClassCount1,
-       MAX(CASE WHEN rc.rn = 2 THEN rc.ClassGroup END) AS ClassGroup2,
-       MAX(CASE WHEN rc.rn = 2 THEN rc.ClassCount END) AS ClassCount2,
+       ISNULL(cgs.MixClassGroupCount, 0) AS MixClassGroupCount,
+       cgl.ClassGroups,
        ms.MismatchCount,
        ms.MismatchExample
-FROM RankedClasses rc
-JOIN TotalCounts tc ON tc.SourceDB = rc.SourceDB AND tc.LotCounter = rc.LotCounter
-JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
+FROM TotalCounts tc
+LEFT JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
+LEFT JOIN ClassGroupList cgl ON cgl.SourceDB = tc.SourceDB AND cgl.LotCounter = tc.LotCounter
 JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCounter
 JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
 JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
 -- BinCounter 이상 여부와 무관하게 혼입/품번불일치만으로 판정
 -- (BinCounter 이상은 BINCOUNTER_GAP 패널이 별도 담당)
-WHERE (cgs.MixClassGroupCount > 1 OR ms.MismatchCount > 0)
-GROUP BY li.Site, li.EquipmentID, li.PortID, tc.LotCounter, ld.LatestDate, tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
-         ms.MismatchCount, ms.MismatchExample
-ORDER BY MismatchCount DESC, ClassGroup2 DESC, Equipment, tc.LotCounter
+-- LEFT JOIN 사용: 혼입 등급이 0개라도(전부 REMEASURE 등) 품번불일치만으로 걸릴 수 있음
+WHERE (ISNULL(cgs.MixClassGroupCount, 0) > 1 OR ms.MismatchCount > 0)
+ORDER BY MismatchCount DESC, Equipment, tc.LotCounter
 OPTION (RECOMPILE);
 """,
     "LABEL_ISSUED_ANOMALY": """
@@ -415,10 +420,17 @@ OPTION (RECOMPILE);
     SELECT SourceDB, LotCounter, COUNT_BIG(*) AS MixClassGroupCount
     FROM ClassCounts
     GROUP BY SourceDB, LotCounter
-), RankedClasses AS (
-    SELECT SourceDB, LotCounter, ClassGroup, ClassCount,
-           ROW_NUMBER() OVER (PARTITION BY SourceDB, LotCounter ORDER BY ClassCount DESC, ClassGroup ASC) AS rn
-    FROM ClassCounts
+), ClassGroupList AS (
+    SELECT cc.SourceDB, cc.LotCounter,
+           STUFF((
+               SELECT ', ' + cc2.ClassGroup + ':' + CONVERT(varchar(20), cc2.ClassCount)
+               FROM ClassCounts cc2
+               WHERE cc2.SourceDB = cc.SourceDB AND cc2.LotCounter = cc.LotCounter
+               ORDER BY cc2.ClassCount DESC
+               FOR XML PATH(''), TYPE
+           ).value('.', 'varchar(max)'), 1, 2, '') AS ClassGroups
+    FROM ClassCounts cc
+    GROUP BY cc.SourceDB, cc.LotCounter
 ), TotalCounts AS (
     SELECT SourceDB, LotCounter,
            COUNT_BIG(*) AS TotalClassCount,
@@ -455,23 +467,19 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        CONVERT(varchar(10), ld.LatestDate, 120) AS WORKDAY,
        DATEPART(HOUR, ld.LatestDate) AS [HOUR],
        tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
-       MAX(CASE WHEN rc.rn = 1 THEN rc.ClassGroup END) AS ClassGroup1,
-       MAX(CASE WHEN rc.rn = 1 THEN rc.ClassCount END) AS ClassCount1,
-       MAX(CASE WHEN rc.rn = 2 THEN rc.ClassGroup END) AS ClassGroup2,
-       MAX(CASE WHEN rc.rn = 2 THEN rc.ClassCount END) AS ClassCount2,
+       ISNULL(cgs.MixClassGroupCount, 0) AS MixClassGroupCount,
+       cgl.ClassGroups,
        ms.MismatchCount,
        ms.MismatchExample
-FROM RankedClasses rc
-JOIN TotalCounts tc ON tc.SourceDB = rc.SourceDB AND tc.LotCounter = rc.LotCounter
-JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
+FROM TotalCounts tc
+LEFT JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
+LEFT JOIN ClassGroupList cgl ON cgl.SourceDB = tc.SourceDB AND cgl.LotCounter = tc.LotCounter
 JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCounter
 JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
 JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
 JOIN LabelInfo lf ON lf.SourceDB = tc.SourceDB AND lf.LotCounter = tc.LotCounter
-WHERE (cgs.MixClassGroupCount > 1 OR ms.MismatchCount > 0)
-GROUP BY li.Site, li.EquipmentID, li.PortID, tc.LotCounter, lf.LabelDatum, ld.LatestDate, tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
-         ms.MismatchCount, ms.MismatchExample
-ORDER BY MismatchCount DESC, ClassGroup2 DESC, Equipment, tc.LotCounter
+WHERE (ISNULL(cgs.MixClassGroupCount, 0) > 1 OR ms.MismatchCount > 0)
+ORDER BY MismatchCount DESC, Equipment, tc.LotCounter
 OPTION (RECOMPILE);
 """,
     "WAFER_DUP": """
@@ -852,7 +860,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v36")
+        self.root.title("Sorter Data SQL Runner v37")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
