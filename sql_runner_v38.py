@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v37
+Sorter Data SQL Runner v38
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -393,6 +393,8 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        CONVERT(varchar(10), ld.LatestDate, 120) AS WORKDAY,
        DATEPART(HOUR, ld.LatestDate) AS [HOUR],
        tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount,
+       CASE WHEN tc.MaxBinCounter <> tc.TotalClassCount AND tc.MaxBinCounter + 1 <> tc.TotalClassCount
+            THEN 1 ELSE 0 END AS BinCounterAnomaly,
        ISNULL(cgs.MixClassGroupCount, 0) AS MixClassGroupCount,
        cgl.ClassGroups,
        ms.MismatchCount,
@@ -403,10 +405,12 @@ LEFT JOIN ClassGroupList cgl ON cgl.SourceDB = tc.SourceDB AND cgl.LotCounter = 
 JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCounter
 JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
 JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
--- BinCounter 이상 여부와 무관하게 혼입/품번불일치만으로 판정
--- (BinCounter 이상은 BINCOUNTER_GAP 패널이 별도 담당)
 -- LEFT JOIN 사용: 혼입 등급이 0개라도(전부 REMEASURE 등) 품번불일치만으로 걸릴 수 있음
-WHERE (ISNULL(cgs.MixClassGroupCount, 0) > 1 OR ms.MismatchCount > 0)
+-- 데이터 누락 체크: MaxBinCounter=COUNT(1-based) 또는 MaxBinCounter+1=COUNT(0-based)
+-- 둘 다 아니면 결번/초과로 판정 (라벨 미발행 원인 중 하나)
+WHERE (ISNULL(cgs.MixClassGroupCount, 0) > 1
+    OR ms.MismatchCount > 0
+    OR (tc.MaxBinCounter <> tc.TotalClassCount AND tc.MaxBinCounter + 1 <> tc.TotalClassCount))
 ORDER BY MismatchCount DESC, Equipment, tc.LotCounter
 OPTION (RECOMPILE);
 """,
@@ -860,7 +864,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v37")
+        self.root.title("Sorter Data SQL Runner v38")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
