@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v41
+Sorter Data SQL Runner v42
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -501,13 +501,6 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        COUNT_BIG(*) AS ArtikelCount,
        MIN(t.[Bin]) AS BinMin, MAX(t.[Bin]) AS BinMax,
        MIN(t.BinCounter) AS MinBinCounter, MAX(t.BinCounter) AS MaxBinCounter,
-       STUFF((
-           SELECT ',' + CONVERT(varchar(20), x.BinCounter)
-           FROM #LabelIssuedAnomaly x
-           WHERE x.SourceDB = t.SourceDB AND x.LotCounter = t.LotCounter AND x.ArtikelNummer = t.ArtikelNummer
-           ORDER BY x.BinCounter
-           FOR XML PATH(''), TYPE
-       ).value('.', 'varchar(max)'), 1, 1, '') AS BinCounterList,
        CONVERT(varchar(19), MAX(t.[Date]), 120) AS LatestDate,
        CONVERT(varchar(19), lf.LabelDatum, 120) AS LabelDatum,
        ql.RuleViolation,
@@ -899,7 +892,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v41")
+        self.root.title("Sorter Data SQL Runner v42")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
