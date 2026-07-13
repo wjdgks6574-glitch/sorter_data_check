@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v38
+Sorter Data SQL Runner v39
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -233,6 +233,9 @@ SELECT
     END AS MixClassGroup,
     CASE
         WHEN c.ClassOnlyGroup IN ('B0', 'EL', 'L-E') THEN 0
+        -- REMEASURE/RWM는 등급 코드 자체가 아니므로 코드 비교 대상에서 제외
+        -- (섞임 여부는 별도로 Lot 단위 RemeasureMixed 조건에서 판정)
+        WHEN c.ArtikelCode IN ('REMEASURE', 'RWM')     THEN 0
         WHEN c.ArtikelGroup  IS NULL
           OR c.ClassOnlyGroup IS NULL                  THEN 0
         WHEN c.ArtikelGroup <> c.ClassOnlyGroup        THEN 1
@@ -254,12 +257,13 @@ OUTER APPLY (
         ClassRaw,
         ArtikelRaw,
         NULLIF(REPLACE(REPLACE(REPLACE(ArtikelRaw, '-', ''), ' ', ''), '/', ''), '') AS ArtikelCode,
+        -- 마지막 '/' 이후 추출: REVERSE는 위치 계산에만 짧게 사용(문자열 길이 짧아 성능 영향 미미)
+        -- 기존 CHARINDEX 이중 계산 방식은 '/'가 3개 이상일 때 두 번째 '/' 기준으로 잘못 추출되는 버그가 있었음
         NULLIF(
             REPLACE(REPLACE(REPLACE(
                 CASE
                     WHEN CHARINDEX('/', ClassRaw) = 0 THEN ClassRaw
-                    ELSE RIGHT(ClassRaw, LEN(ClassRaw) - CHARINDEX('/', ClassRaw,
-                                LEN(ClassRaw) - CHARINDEX('/', ClassRaw) + 1))
+                    ELSE SUBSTRING(ClassRaw, LEN(ClassRaw) - CHARINDEX('/', REVERSE(ClassRaw)) + 2, LEN(ClassRaw))
                 END,
             '-', ''), ' ', ''), '/', ''),
         '') AS ClassArticleCode,
@@ -385,6 +389,14 @@ PANEL_SQL = {
                END) AS MismatchExample
     FROM #LabelMissing
     GROUP BY SourceDB, LotCounter
+), RemeasureStats AS (
+    -- REMEASURE/RWM 행과 그 외(정상 측정) 행이 같은 Lot에 공존하면 혼입으로 판정
+    -- (Lot 전체가 REMEASURE/RWM뿐이면 비교 대상이 없어 정상 처리)
+    SELECT SourceDB, LotCounter,
+           SUM(CASE WHEN ArtikelCode IN ('REMEASURE', 'RWM') THEN 1 ELSE 0 END) AS RemeasureCount,
+           SUM(CASE WHEN ArtikelCode NOT IN ('REMEASURE', 'RWM') OR ArtikelCode IS NULL THEN 1 ELSE 0 END) AS NonRemeasureCount
+    FROM #LabelMissing
+    GROUP BY SourceDB, LotCounter
 )
 SELECT li.Site, li.EquipmentID, li.PortID,
        REPLACE(li.EquipmentID, '-CS-', '-') AS Equipment,
@@ -398,19 +410,23 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        ISNULL(cgs.MixClassGroupCount, 0) AS MixClassGroupCount,
        cgl.ClassGroups,
        ms.MismatchCount,
-       ms.MismatchExample
+       ms.MismatchExample,
+       CASE WHEN rs.RemeasureCount > 0 AND rs.NonRemeasureCount > 0 THEN 1 ELSE 0 END AS RemeasureMixed,
+       rs.RemeasureCount
 FROM TotalCounts tc
 LEFT JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
 LEFT JOIN ClassGroupList cgl ON cgl.SourceDB = tc.SourceDB AND cgl.LotCounter = tc.LotCounter
 JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCounter
 JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
 JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
+JOIN RemeasureStats rs ON rs.SourceDB = tc.SourceDB AND rs.LotCounter = tc.LotCounter
 -- LEFT JOIN 사용: 혼입 등급이 0개라도(전부 REMEASURE 등) 품번불일치만으로 걸릴 수 있음
 -- 데이터 누락 체크: MaxBinCounter=COUNT(1-based) 또는 MaxBinCounter+1=COUNT(0-based)
 -- 둘 다 아니면 결번/초과로 판정 (라벨 미발행 원인 중 하나)
 WHERE (ISNULL(cgs.MixClassGroupCount, 0) > 1
     OR ms.MismatchCount > 0
-    OR (tc.MaxBinCounter <> tc.TotalClassCount AND tc.MaxBinCounter + 1 <> tc.TotalClassCount))
+    OR (tc.MaxBinCounter <> tc.TotalClassCount AND tc.MaxBinCounter + 1 <> tc.TotalClassCount)
+    OR (rs.RemeasureCount > 0 AND rs.NonRemeasureCount > 0))
 ORDER BY MismatchCount DESC, Equipment, tc.LotCounter
 OPTION (RECOMPILE);
 """,
@@ -462,6 +478,12 @@ OPTION (RECOMPILE);
     SELECT SourceDB, LotCounter, MAX(LabelDatum) AS LabelDatum
     FROM #LabelIssuedAnomaly
     GROUP BY SourceDB, LotCounter
+), RemeasureStats AS (
+    SELECT SourceDB, LotCounter,
+           SUM(CASE WHEN ArtikelCode IN ('REMEASURE', 'RWM') THEN 1 ELSE 0 END) AS RemeasureCount,
+           SUM(CASE WHEN ArtikelCode NOT IN ('REMEASURE', 'RWM') OR ArtikelCode IS NULL THEN 1 ELSE 0 END) AS NonRemeasureCount
+    FROM #LabelIssuedAnomaly
+    GROUP BY SourceDB, LotCounter
 )
 SELECT li.Site, li.EquipmentID, li.PortID,
        REPLACE(li.EquipmentID, '-CS-', '-') AS Equipment,
@@ -474,7 +496,9 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        ISNULL(cgs.MixClassGroupCount, 0) AS MixClassGroupCount,
        cgl.ClassGroups,
        ms.MismatchCount,
-       ms.MismatchExample
+       ms.MismatchExample,
+       CASE WHEN rs.RemeasureCount > 0 AND rs.NonRemeasureCount > 0 THEN 1 ELSE 0 END AS RemeasureMixed,
+       rs.RemeasureCount
 FROM TotalCounts tc
 LEFT JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
 LEFT JOIN ClassGroupList cgl ON cgl.SourceDB = tc.SourceDB AND cgl.LotCounter = tc.LotCounter
@@ -482,7 +506,10 @@ JOIN LatestDates ld ON ld.SourceDB = tc.SourceDB AND ld.LotCounter = tc.LotCount
 JOIN LotInfo li ON li.SourceDB = tc.SourceDB AND li.LotCounter = tc.LotCounter
 JOIN MismatchStats ms ON ms.SourceDB = tc.SourceDB AND ms.LotCounter = tc.LotCounter
 JOIN LabelInfo lf ON lf.SourceDB = tc.SourceDB AND lf.LotCounter = tc.LotCounter
-WHERE (ISNULL(cgs.MixClassGroupCount, 0) > 1 OR ms.MismatchCount > 0)
+JOIN RemeasureStats rs ON rs.SourceDB = tc.SourceDB AND rs.LotCounter = tc.LotCounter
+WHERE (ISNULL(cgs.MixClassGroupCount, 0) > 1
+    OR ms.MismatchCount > 0
+    OR (rs.RemeasureCount > 0 AND rs.NonRemeasureCount > 0))
 ORDER BY MismatchCount DESC, Equipment, tc.LotCounter
 OPTION (RECOMPILE);
 """,
@@ -864,7 +891,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v38")
+        self.root.title("Sorter Data SQL Runner v39")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
