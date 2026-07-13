@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v42
+Sorter Data SQL Runner v43
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -492,26 +492,45 @@ OPTION (RECOMPILE);
     SELECT SourceDB, LotCounter, MIN(Site) AS Site, MIN(EquipmentID) AS EquipmentID, MIN(PortID) AS PortID
     FROM #LabelIssuedAnomaly
     GROUP BY SourceDB, LotCounter
+), ArtikelStats AS (
+    SELECT SourceDB, LotCounter, ArtikelNummer, COUNT_BIG(*) AS ArtikelCount
+    FROM #LabelIssuedAnomaly
+    GROUP BY SourceDB, LotCounter, ArtikelNummer
+), ArtikelBreakdownList AS (
+    -- 요구사항 2: Lot당 1행으로 압축, ArtikelNummer 종류별 개수를 "종류:개수" 형태로 한 컬럼에 요약
+    SELECT a.SourceDB, a.LotCounter,
+           STUFF((
+               SELECT ', ' + a2.ArtikelNummer + ':' + CONVERT(varchar(20), a2.ArtikelCount)
+               FROM ArtikelStats a2
+               WHERE a2.SourceDB = a.SourceDB AND a2.LotCounter = a.LotCounter
+               ORDER BY a2.ArtikelCount DESC
+               FOR XML PATH(''), TYPE
+           ).value('.', 'varchar(max)'), 1, 2, '') AS ArtikelBreakdown
+    FROM ArtikelStats a
+    GROUP BY a.SourceDB, a.LotCounter
+), LotBinStats AS (
+    SELECT SourceDB, LotCounter,
+           MIN([Bin]) AS BinMin, MAX([Bin]) AS BinMax,
+           MIN(BinCounter) AS MinBinCounter, MAX(BinCounter) AS MaxBinCounter,
+           MAX([Date]) AS LatestDate
+    FROM #LabelIssuedAnomaly
+    GROUP BY SourceDB, LotCounter
 )
--- Lot + ArtikelNummer 종류별로 행 분리 (요구사항 2)
 SELECT li.Site, li.EquipmentID, li.PortID,
        REPLACE(li.EquipmentID, '-CS-', '-') AS Equipment,
-       t.LotCounter,
-       t.ArtikelNummer,
-       COUNT_BIG(*) AS ArtikelCount,
-       MIN(t.[Bin]) AS BinMin, MAX(t.[Bin]) AS BinMax,
-       MIN(t.BinCounter) AS MinBinCounter, MAX(t.BinCounter) AS MaxBinCounter,
-       CONVERT(varchar(19), MAX(t.[Date]), 120) AS LatestDate,
+       ql.LotCounter,
+       ab.ArtikelBreakdown,
+       lb.BinMin, lb.BinMax, lb.MinBinCounter, lb.MaxBinCounter,
+       CONVERT(varchar(19), lb.LatestDate, 120) AS LatestDate,
        CONVERT(varchar(19), lf.LabelDatum, 120) AS LabelDatum,
        ql.RuleViolation,
        ql.ViolationDetail
-FROM #LabelIssuedAnomaly t
-JOIN QualifyingLots ql ON ql.SourceDB = t.SourceDB AND ql.LotCounter = t.LotCounter
-JOIN LotInfo li ON li.SourceDB = t.SourceDB AND li.LotCounter = t.LotCounter
-JOIN LabelInfo lf ON lf.SourceDB = t.SourceDB AND lf.LotCounter = t.LotCounter
-GROUP BY li.Site, li.EquipmentID, li.PortID, t.SourceDB, t.LotCounter, t.ArtikelNummer,
-         lf.LabelDatum, ql.RuleViolation, ql.ViolationDetail
-ORDER BY ql.RuleViolation DESC, Equipment, t.LotCounter, ArtikelCount DESC
+FROM QualifyingLots ql
+JOIN LotInfo li ON li.SourceDB = ql.SourceDB AND li.LotCounter = ql.LotCounter
+JOIN ArtikelBreakdownList ab ON ab.SourceDB = ql.SourceDB AND ab.LotCounter = ql.LotCounter
+JOIN LotBinStats lb ON lb.SourceDB = ql.SourceDB AND lb.LotCounter = ql.LotCounter
+JOIN LabelInfo lf ON lf.SourceDB = ql.SourceDB AND lf.LotCounter = ql.LotCounter
+ORDER BY Equipment, ql.LotCounter
 OPTION (RECOMPILE);
 """,
     "WAFER_DUP": """
@@ -892,7 +911,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v42")
+        self.root.title("Sorter Data SQL Runner v43")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
