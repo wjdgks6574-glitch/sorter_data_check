@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v43
+Sorter Data SQL Runner v44
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -465,16 +465,65 @@ OPTION (RECOMPILE);
                OR (L_H_REMEASURE = 1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_RWM=1 OR A_GA=1))
                 THEN 1 ELSE 0
            END AS RuleViolation,
+           -- 각 규칙별로 트리거 여부 + 실제로 발견된 금지 토큰까지 상세 표기
            STUFF(
-               CASE WHEN L_A2=1 AND (A_UL=1 OR A_A1=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',A-2 Klasse+금지Artikel' ELSE '' END +
-               CASE WHEN L_A1=1 AND (A_UL=1 OR A_A2=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',A-1 Klasse+금지Artikel' ELSE '' END +
-               CASE WHEN L_UL=1 AND (A_A2=1 OR A_A1=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',U-L Klasse+금지Artikel' ELSE '' END +
-               CASE WHEN L_B0=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',B-0 Klasse+금지Artikel' ELSE '' END +
-               CASE WHEN L_LE=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_B0=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',L-E Klasse+금지Artikel' ELSE '' END +
-               CASE WHEN L_EL=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',/EL Klasse+금지Artikel' ELSE '' END +
-               CASE WHEN L_H_RWM=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_REMEASURE=1 OR A_GA=1) THEN ',H-RWM+타등급혼재' ELSE '' END +
-               CASE WHEN L_H_REMEASURE=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_RWM=1 OR A_GA=1) THEN ',H-REMEASURE+타등급혼재' ELSE '' END
-           , 1, 1, '') AS ViolationDetail
+               CASE WHEN L_A2=1 AND (A_UL=1 OR A_A1=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1)
+                    THEN '; Klasse[A-2]에 금지Artikel[' + STUFF(
+                        CASE WHEN A_UL=1 THEN '/UL' ELSE '' END + CASE WHEN A_A1=1 THEN '/A1' ELSE '' END +
+                        CASE WHEN A_B0=1 THEN '/B0' ELSE '' END + CASE WHEN A_RWM=1 THEN '/RWM' ELSE '' END +
+                        CASE WHEN A_LE=1 THEN '/LE' ELSE '' END + CASE WHEN A_REMEASURE=1 THEN '/REMEASURE' ELSE '' END +
+                        CASE WHEN A_GA=1 THEN '/GA' ELSE '' END, 1, 1, '') + '] 혼재'
+                    ELSE '' END +
+               CASE WHEN L_A1=1 AND (A_UL=1 OR A_A2=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1)
+                    THEN '; Klasse[A-1]에 금지Artikel[' + STUFF(
+                        CASE WHEN A_UL=1 THEN '/UL' ELSE '' END + CASE WHEN A_A2=1 THEN '/A2' ELSE '' END +
+                        CASE WHEN A_B0=1 THEN '/B0' ELSE '' END + CASE WHEN A_RWM=1 THEN '/RWM' ELSE '' END +
+                        CASE WHEN A_LE=1 THEN '/LE' ELSE '' END + CASE WHEN A_REMEASURE=1 THEN '/REMEASURE' ELSE '' END +
+                        CASE WHEN A_GA=1 THEN '/GA' ELSE '' END, 1, 1, '') + '] 혼재'
+                    ELSE '' END +
+               CASE WHEN L_UL=1 AND (A_A2=1 OR A_A1=1 OR A_B0=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1)
+                    THEN '; Klasse[U-L]에 금지Artikel[' + STUFF(
+                        CASE WHEN A_A2=1 THEN '/A2' ELSE '' END + CASE WHEN A_A1=1 THEN '/A1' ELSE '' END +
+                        CASE WHEN A_B0=1 THEN '/B0' ELSE '' END + CASE WHEN A_RWM=1 THEN '/RWM' ELSE '' END +
+                        CASE WHEN A_LE=1 THEN '/LE' ELSE '' END + CASE WHEN A_REMEASURE=1 THEN '/REMEASURE' ELSE '' END +
+                        CASE WHEN A_GA=1 THEN '/GA' ELSE '' END, 1, 1, '') + '] 혼재'
+                    ELSE '' END +
+               CASE WHEN L_B0=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_LE=1 OR A_REMEASURE=1 OR A_GA=1)
+                    THEN '; Klasse[B-0]에 금지Artikel[' + STUFF(
+                        CASE WHEN A_A2=1 THEN '/A2' ELSE '' END + CASE WHEN A_A1=1 THEN '/A1' ELSE '' END +
+                        CASE WHEN A_UL=1 THEN '/UL' ELSE '' END + CASE WHEN A_RWM=1 THEN '/RWM' ELSE '' END +
+                        CASE WHEN A_LE=1 THEN '/LE' ELSE '' END + CASE WHEN A_REMEASURE=1 THEN '/REMEASURE' ELSE '' END +
+                        CASE WHEN A_GA=1 THEN '/GA' ELSE '' END, 1, 1, '') + '] 혼재'
+                    ELSE '' END +
+               CASE WHEN L_LE=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_B0=1 OR A_REMEASURE=1 OR A_GA=1)
+                    THEN '; Klasse[L-E]에 금지Artikel[' + STUFF(
+                        CASE WHEN A_A2=1 THEN '/A2' ELSE '' END + CASE WHEN A_A1=1 THEN '/A1' ELSE '' END +
+                        CASE WHEN A_UL=1 THEN '/UL' ELSE '' END + CASE WHEN A_RWM=1 THEN '/RWM' ELSE '' END +
+                        CASE WHEN A_B0=1 THEN '/B0' ELSE '' END + CASE WHEN A_REMEASURE=1 THEN '/REMEASURE' ELSE '' END +
+                        CASE WHEN A_GA=1 THEN '/GA' ELSE '' END, 1, 1, '') + '] 혼재'
+                    ELSE '' END +
+               CASE WHEN L_EL=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_RWM=1 OR A_REMEASURE=1 OR A_GA=1)
+                    THEN '; Klasse[/EL]에 금지Artikel[' + STUFF(
+                        CASE WHEN A_A2=1 THEN '/A2' ELSE '' END + CASE WHEN A_A1=1 THEN '/A1' ELSE '' END +
+                        CASE WHEN A_UL=1 THEN '/UL' ELSE '' END + CASE WHEN A_RWM=1 THEN '/RWM' ELSE '' END +
+                        CASE WHEN A_REMEASURE=1 THEN '/REMEASURE' ELSE '' END + CASE WHEN A_GA=1 THEN '/GA' ELSE '' END
+                    , 1, 1, '') + '] 혼재'
+                    ELSE '' END +
+               CASE WHEN L_H_RWM=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_REMEASURE=1 OR A_GA=1)
+                    THEN '; Klasse[H-]+Artikel[RWM] 행 존재, 동일Lot 내 다른 행 Artikel[' + STUFF(
+                        CASE WHEN A_A2=1 THEN '/A2' ELSE '' END + CASE WHEN A_A1=1 THEN '/A1' ELSE '' END +
+                        CASE WHEN A_UL=1 THEN '/UL' ELSE '' END + CASE WHEN A_B0=1 THEN '/B0' ELSE '' END +
+                        CASE WHEN A_REMEASURE=1 THEN '/REMEASURE' ELSE '' END + CASE WHEN A_GA=1 THEN '/GA' ELSE '' END
+                    , 1, 1, '') + '] 혼재'
+                    ELSE '' END +
+               CASE WHEN L_H_REMEASURE=1 AND (A_A2=1 OR A_A1=1 OR A_UL=1 OR A_B0=1 OR A_RWM=1 OR A_GA=1)
+                    THEN '; Klasse[H-]+Artikel[REMEASURE] 행 존재, 동일Lot 내 다른 행 Artikel[' + STUFF(
+                        CASE WHEN A_A2=1 THEN '/A2' ELSE '' END + CASE WHEN A_A1=1 THEN '/A1' ELSE '' END +
+                        CASE WHEN A_UL=1 THEN '/UL' ELSE '' END + CASE WHEN A_B0=1 THEN '/B0' ELSE '' END +
+                        CASE WHEN A_RWM=1 THEN '/RWM' ELSE '' END + CASE WHEN A_GA=1 THEN '/GA' ELSE '' END
+                    , 1, 1, '') + '] 혼재'
+                    ELSE '' END
+           , 1, 2, '') AS ViolationDetail
     FROM LotFlags
 ), QualifyingLots AS (
     -- 규칙 위반(RuleViolation=1) Lot만 대상. A-2/U-L/A-1/B0 등급이라도
@@ -520,10 +569,8 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        REPLACE(li.EquipmentID, '-CS-', '-') AS Equipment,
        ql.LotCounter,
        ab.ArtikelBreakdown,
-       lb.BinMin, lb.BinMax, lb.MinBinCounter, lb.MaxBinCounter,
        CONVERT(varchar(19), lb.LatestDate, 120) AS LatestDate,
        CONVERT(varchar(19), lf.LabelDatum, 120) AS LabelDatum,
-       ql.RuleViolation,
        ql.ViolationDetail
 FROM QualifyingLots ql
 JOIN LotInfo li ON li.SourceDB = ql.SourceDB AND li.LotCounter = ql.LotCounter
@@ -911,7 +958,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v43")
+        self.root.title("Sorter Data SQL Runner v44")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
