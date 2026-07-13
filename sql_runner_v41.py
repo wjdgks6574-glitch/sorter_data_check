@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v40
+Sorter Data SQL Runner v41
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -477,12 +477,13 @@ OPTION (RECOMPILE);
            , 1, 1, '') AS ViolationDetail
     FROM LotFlags
 ), QualifyingLots AS (
-    -- 요구사항 2: Klasse에 A-2/U-L/A-1/B0 포함된 Lot은 무조건 종류별 breakdown 대상
-    -- + 1번 규칙 위반 Lot(L-E/EL/H- 계열 포함)도 함께 포함
+    -- 규칙 위반(RuleViolation=1) Lot만 대상. A-2/U-L/A-1/B0 등급이라도
+    -- 위반이 없으면(예: 2320A2/2340A2처럼 같은 등급 내 하위값 혼재는 정상) 제외.
+    -- 위반 Lot 중 A-2/U-L/A-1/B0 타입은 요구사항2에 따라 종류별로 breakdown되어 표시됨.
     SELECT lf.SourceDB, lf.LotCounter, la.RuleViolation, la.ViolationDetail
     FROM LotFlags lf
     JOIN LotAnomaly la ON la.SourceDB = lf.SourceDB AND la.LotCounter = lf.LotCounter
-    WHERE la.RuleViolation = 1 OR lf.L_A2 = 1 OR lf.L_A1 = 1 OR lf.L_UL = 1 OR lf.L_B0 = 1
+    WHERE la.RuleViolation = 1
 ), LabelInfo AS (
     SELECT SourceDB, LotCounter, MAX(LabelDatum) AS LabelDatum
     FROM #LabelIssuedAnomaly
@@ -898,7 +899,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v40")
+        self.root.title("Sorter Data SQL Runner v41")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
