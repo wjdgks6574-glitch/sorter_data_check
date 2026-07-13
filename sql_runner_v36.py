@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v35
+Sorter Data SQL Runner v36
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컨트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -263,34 +263,42 @@ OUTER APPLY (
                 END,
             '-', ''), ' ', ''), '/', ''),
         '') AS ClassArticleCode,
+        -- 등급 판정: 대시/공백 제거한 ClassNorm 기준 (A2 == A-2 인식)
         CASE
             WHEN ClassRaw  IS NULL OR ClassRaw = ''   THEN 'class empty'
-            WHEN ClassRaw  LIKE '%B0'                 THEN 'B0'
-            WHEN ClassRaw  LIKE '%EL'                 THEN 'EL'
-            WHEN ClassRaw  LIKE '%L-E'                THEN 'L-E'
-            WHEN ClassRaw  LIKE '%A-2'                THEN 'A-2'
-            WHEN ClassRaw  LIKE '%A-1'                THEN 'A-1'
-            WHEN ClassRaw  LIKE '%U-L'                THEN 'U-L'
-            WHEN ClassRaw  LIKE '%GA'                 THEN 'GA'
+            WHEN ClassNorm LIKE '%B0'                 THEN 'B0'
+            WHEN ClassNorm LIKE '%EL'                 THEN 'EL'
+            WHEN ClassNorm LIKE '%LE'                 THEN 'L-E'
+            WHEN ClassNorm LIKE '%A2'                 THEN 'A-2'
+            WHEN ClassNorm LIKE '%A1'                 THEN 'A-1'
+            WHEN ClassNorm LIKE '%UL'                 THEN 'U-L'
+            WHEN ClassNorm LIKE '%GA'                 THEN 'GA'
             ELSE 'Other'
         END AS ClassOnlyGroup,
+        -- REMEASURE/RWM는 원본 기준, 등급은 ArtikelNorm 기준 (대시/공백 무시)
         CASE
             WHEN NULLIF(REPLACE(REPLACE(REPLACE(ArtikelRaw, '-', ''), ' ', ''), '/', ''), '') IS NULL THEN NULL
-            WHEN ArtikelRaw LIKE '%REMEASURE%' THEN 'remeasure'
-            WHEN ArtikelRaw LIKE '%RWM%'       THEN 'RWM'
-            WHEN ArtikelRaw LIKE '%B0'         THEN 'B0'
-            WHEN ArtikelRaw LIKE '%EL'         THEN 'EL'
-            WHEN ArtikelRaw LIKE '%L-E'        THEN 'L-E'
-            WHEN ArtikelRaw LIKE '%A-2'        THEN 'A-2'
-            WHEN ArtikelRaw LIKE '%A-1'        THEN 'A-1'
-            WHEN ArtikelRaw LIKE '%U-L'        THEN 'U-L'
-            WHEN ArtikelRaw LIKE '%GA'         THEN 'GA'
+            WHEN ArtikelRaw  LIKE '%REMEASURE%' THEN 'remeasure'
+            WHEN ArtikelRaw  LIKE '%RWM%'       THEN 'RWM'
+            WHEN ArtikelNorm LIKE '%B0'         THEN 'B0'
+            WHEN ArtikelNorm LIKE '%EL'         THEN 'EL'
+            WHEN ArtikelNorm LIKE '%LE'         THEN 'L-E'
+            WHEN ArtikelNorm LIKE '%A2'         THEN 'A-2'
+            WHEN ArtikelNorm LIKE '%A1'         THEN 'A-1'
+            WHEN ArtikelNorm LIKE '%UL'         THEN 'U-L'
+            WHEN ArtikelNorm LIKE '%GA'         THEN 'GA'
             ELSE 'Other'
         END AS ArtikelGroup
     FROM (
         SELECT
-            UPPER(LTRIM(RTRIM(CONVERT(varchar(200), b.[Class])))) AS ClassRaw,
-            UPPER(LTRIM(RTRIM(CONVERT(varchar(100), b.ArtikelNummer)))) AS ArtikelRaw
+            ClassRaw, ArtikelRaw,
+            REPLACE(REPLACE(ClassRaw,  '-', ''), ' ', '') AS ClassNorm,
+            REPLACE(REPLACE(ArtikelRaw, '-', ''), ' ', '') AS ArtikelNorm
+        FROM (
+            SELECT
+                UPPER(LTRIM(RTRIM(CONVERT(varchar(200), b.[Class])))) AS ClassRaw,
+                UPPER(LTRIM(RTRIM(CONVERT(varchar(100), b.ArtikelNummer)))) AS ArtikelRaw
+        ) r0
     ) raw
 ) c
 OPTION (RECOMPILE);
@@ -844,7 +852,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v35")
+        self.root.title("Sorter Data SQL Runner v36")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
