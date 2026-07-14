@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v46
+Sorter Data SQL Runner v47
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컴트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -404,7 +404,7 @@ SELECT li.Site, li.EquipmentID, li.PortID,
        CONVERT(varchar(19), ld.LatestDate, 120) AS LatestDate,
        CONVERT(varchar(10), ld.LatestDate, 120) AS WORKDAY,
        DATEPART(HOUR, ld.LatestDate) AS [HOUR],
-       tc.MaxBinCounter, tc.TotalClassCount, tc.DistinctBinCount
+       tc.MaxBinCounter AS [Bincounter 최대값], tc.TotalClassCount AS [데이터 갯수], tc.DistinctBinCount AS [서로 다른 bincounter 갯수]
 FROM TotalCounts tc
 LEFT JOIN ClassGroupStats cgs ON cgs.SourceDB = tc.SourceDB AND cgs.LotCounter = tc.LotCounter
 LEFT JOIN ClassGroupList cgl ON cgl.SourceDB = tc.SourceDB AND cgl.LotCounter = tc.LotCounter
@@ -950,7 +950,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v46")
+        self.root.title("Sorter Data SQL Runner v47")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
