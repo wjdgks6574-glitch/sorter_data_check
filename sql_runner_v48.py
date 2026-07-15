@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Sorter Data SQL Runner v47
+Sorter Data SQL Runner v48
 - 소터(분류) 설비 생산 데이터를 SQL Server에서 조회해 이상 항목을 패널별로 표시
 - UI: 상단 컴트롤 + 컴팩트 필터 바(Site/Machine/Equipment/결과필터)
       + 좌측 5탭 리스트 + 우측 단일 결과 패널
@@ -25,6 +25,15 @@ from tkinter import (
 from tkinter import ttk, filedialog, messagebox
 import tkinter.font as tkfont
 from urllib.parse import quote_plus
+
+if __name__ == "__main__":
+    try:
+        import ctypes
+        _console_hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if _console_hwnd:
+            ctypes.windll.user32.ShowWindow(_console_hwnd, 0)
+    except Exception:
+        pass
 
 import pandas as pd
 
@@ -950,7 +959,7 @@ class ResultPanel:
 class SQLRunnerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Sorter Data SQL Runner v47")
+        self.root.title("Sorter Data SQL Runner v48")
         self.root.geometry("1680x980")
         self.root.minsize(1300, 780)
         self._maximize()
